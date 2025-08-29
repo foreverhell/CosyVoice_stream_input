@@ -310,11 +310,11 @@ def inference(mode, spk_id, text, ref_text, prompt_speech_16k, stream=True, open
                 yield audio_stream
         else:#if isinstance(text,list) or isinstance(text,Generator):
             for _, j in enumerate(cosyvoice.inference_zero_shot(text, ref_text, prompt_speech_16k, stream=stream)):
-                output = j["tts_speech"]
-                audio_stream = (output.numpy() * 32767).astype(np.int16).tobytes()
                 if openai:
                     yield j
                 else:
+                    output = j["tts_speech"]
+                    audio_stream = (output.numpy() * 32767).astype(np.int16).tobytes()
                     yield audio_stream
     elif mode=="zero-shot-with-spk-id":
         print(cosyvoice.list_available_spks())
@@ -343,11 +343,11 @@ def inference(mode, spk_id, text, ref_text, prompt_speech_16k, stream=True, open
                 yield audio_stream
         else:#if isinstance(text,list) or isinstance(text,Generator):
             for _, j in enumerate(cosyvoice.inference_zero_shot(text, '', '', zero_shot_spk_id=spk_id, stream=stream)):
-                output = j["tts_speech"]
-                audio_stream = (output.numpy() * 32767).astype(np.int16).tobytes()
                 if openai:
                     yield j
                 else:
+                    output = j["tts_speech"]
+                    audio_stream = (output.numpy() * 32767).astype(np.int16).tobytes()
                     yield audio_stream
     elif mode=="crosslingual":
         for _, j in enumerate(cosyvoice.inference_cross_lingual(text, prompt_speech_16k, stream=stream)):
