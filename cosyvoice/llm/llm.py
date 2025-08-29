@@ -581,28 +581,33 @@ class Qwen2LM(TransformerLM):
         text_len = 0
         
         for this_text in text:
-            #print("this_text",this_text)
-            this_text_emb = self.llm.model.model.embed_tokens(this_text)
-            print("this_text_emb.shape: ", this_text_emb.shape, this_text_emb.size(0))
-            text_len += this_text_emb.size(0)
+            try:
+                print("this_text",this_text)
+                this_text_emb = self.llm.model.model.embed_tokens(this_text)
+                print("this_text_emb.shape: ", this_text_emb.shape, this_text_emb.size(0))
+                text_len += this_text_emb.size(0)
+                
+                text_cache = torch.concat([text_cache, this_text_emb], dim=1)
+                if text_len % 3 == 0:
+                    lm_input = torch.concat([sos_eos_emb, text_cache, task_id_emb, prompt_speech_token_emb], dim=1)
+                    min_len = 0 #0
+                    max_len = 15 #15
             
-            text_cache = torch.concat([text_cache, this_text_emb], dim=1)
-            if text_len % 3 == 0:
-                lm_input = torch.concat([sos_eos_emb, text_cache, task_id_emb, prompt_speech_token_emb], dim=1)
-                min_len = 0 #0
-                max_len = 15 #15
-        
-                for speech_token in self.inference_wrapper(lm_input, sampling, min_len, max_len, uuid):
-                    prompt_speech_token_emb = torch.concat([prompt_speech_token_emb, self.speech_embedding.weight[speech_token].reshape(1, 1, -1)], dim=1)
-                    yield speech_token
-        
+                    for speech_token in self.inference_wrapper(lm_input, sampling, min_len, max_len, uuid):
+                        prompt_speech_token_emb = torch.concat([prompt_speech_token_emb, self.speech_embedding.weight[speech_token].reshape(1, 1, -1)], dim=1)
+                        yield speech_token
+            except:
+                break
 
         # 3. final decode
-        lm_input = torch.concat([sos_eos_emb, text_cache, task_id_emb, prompt_speech_token_emb], dim=1)
-        logging.info('no more text token, decode until met eos')
-        for speech_token in self.inference_wrapper(lm_input, sampling, 0, 10 * text_len, uuid):
-            prompt_speech_token_emb = torch.concat([prompt_speech_token_emb, self.speech_embedding.weight[speech_token].reshape(1, 1, -1)], dim=1)
-            yield speech_token
+        try:
+            lm_input = torch.concat([sos_eos_emb, text_cache, task_id_emb, prompt_speech_token_emb], dim=1)
+            logging.info('no more text token, decode until met eos')
+            for speech_token in self.inference_wrapper(lm_input, sampling, 0, 10 * text_len, uuid):
+                prompt_speech_token_emb = torch.concat([prompt_speech_token_emb, self.speech_embedding.weight[speech_token].reshape(1, 1, -1)], dim=1)
+                yield speech_token
+        except:
+            pass
             
              
             
