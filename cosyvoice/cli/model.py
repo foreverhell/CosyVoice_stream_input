@@ -396,6 +396,9 @@ class CosyVoice2Model(CosyVoiceModel):
                     break
             p.join()
             # deal with remain tokens, make sure inference remain token len equals token_hop_len when cache_speech is not None
+            if len(self.tts_speech_token_dict[this_uuid])==0:
+                yield {}
+                return
             this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid]).unsqueeze(dim=0)
             this_tts_speech = self.token2wav(token=this_tts_speech_token,
                                              prompt_token=flow_prompt_speech_token,
@@ -408,6 +411,9 @@ class CosyVoice2Model(CosyVoiceModel):
         else:
             # deal with all tokens
             p.join()
+            if len(self.tts_speech_token_dict[this_uuid])==0:
+                yield {}
+                return
             this_tts_speech_token = torch.tensor(self.tts_speech_token_dict[this_uuid]).unsqueeze(dim=0)
             #print("this_tts_speech_token: ", this_tts_speech_token)
             this_tts_speech = self.token2wav(token=this_tts_speech_token,
