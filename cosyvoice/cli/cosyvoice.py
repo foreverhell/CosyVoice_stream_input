@@ -165,8 +165,10 @@ class CosyVoice:
             start_time = time.time()
             logging.info('synthesis text {}'.format(i))
             for model_output in self.model.tts(**model_input, stream=stream, speed=speed):
-                speech_len = model_output['tts_speech'].shape[1] / self.sample_rate
-                logging.info('yield speech len {}, rtf {}'.format(speech_len, (time.time() - start_time) / speech_len))
+                if model_output.get("tts_speech") is not None:
+                    speech_len = model_output['tts_speech'].shape[1] / self.sample_rate
+                    logging.info('yield speech len {}, rtf {}'.format(speech_len, (time.time() - start_time) / speech_len))
+                model_output["text"] = model_input.get("consumed_texts")
                 yield model_output
                 start_time = time.time()
 
