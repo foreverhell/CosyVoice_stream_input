@@ -588,7 +588,7 @@ class Qwen2LM(TransformerLM):
                 text_len += this_text_emb.size(0)
                 
                 text_cache = torch.concat([text_cache, this_text_emb], dim=1)
-                if text_len % 3 == 0:
+                if text_len % 5 == 0:#长度长一点，增加识别语言的准确性
                     lm_input = torch.concat([sos_eos_emb, text_cache, task_id_emb, prompt_speech_token_emb], dim=1)
                     min_len = 0 #0
                     max_len = 15 #15
