@@ -348,17 +348,62 @@ def inference(mode, spk_id, text, ref_text, prompt_speech_16k, stream=True, open
                 else:
                     output = j["tts_speech"]
                     audio_stream = (output.numpy() * 32767).astype(np.int16).tobytes()
-                    yield audio_stream
+                    yield audio_stream  
     elif mode=="crosslingual":
-        for _, j in enumerate(cosyvoice.inference_cross_lingual(text, prompt_speech_16k, stream=stream)):
-            output = j["tts_speech"]
-            audio_stream = (output.numpy() * 32767).astype(np.int16).tobytes()
-            yield audio_stream
+        if isinstance(text,str):
+            for _, j in enumerate(cosyvoice.inference_cross_lingual(text, prompt_speech_16k, stream=stream)):
+                output = j["tts_speech"]
+                audio_stream = (output.numpy() * 32767).astype(np.int16).tobytes()
+                yield audio_stream
+        else:#if isinstance(text,list) or isinstance(text,Generator):
+            for _, j in enumerate(cosyvoice.inference_cross_lingual(text, prompt_speech_16k, stream=stream)):
+                if openai:
+                    yield j
+                else:
+                    output = j["tts_speech"]
+                    audio_stream = (output.numpy() * 32767).astype(np.int16).tobytes()
+                    yield audio_stream
+    elif mode=="crosslingual-with-spk-id":
+        print(cosyvoice.list_available_spks())
+        if spk_id=="":
+            spk_id = "female"
+        elif isinstance(spk_id, str):
+            if spk_id not in cosyvoice.list_available_spks():
+                spk_id = "female"
+        elif isinstance(spk_id,torch.Tensor):#[1,192]，最好不要这样传；或者修改female的这两个参数？
+            cosyvoice.frontend.spk2info["tmp"] = {}
+            cosyvoice.frontend.spk2info["tmp"]["llm_embedding"] = spk_id
+            cosyvoice.frontend.spk2info["tmp"]["flow_embedding"] = spk_id
+            spk_id = "tmp"
+        else:
+            raise(f"{type(spk_id)} format spk_id is not supported")
+        if cosyvoice.frontend.spk2info[spk_id].get("flow_embedding") is None and cosyvoice.frontend.spk2info[spk_id].get("llm_embedding") is None:
+            if cosyvoice.frontend.spk2info[spk_id].get("embedding") is not None:
+                cosyvoice.frontend.spk2info[spk_id]["flow_embedding"] = cosyvoice.frontend.spk2info[spk_id]["embedding"]
+                cosyvoice.frontend.spk2info[spk_id]["llm_embedding"] = cosyvoice.frontend.spk2info[spk_id]["embedding"]
+            else:
+                raise("Embedding is NEEDED!")
+        if isinstance(text,str):
+            for _, j in enumerate(cosyvoice.inference_cross_lingual(text, '', zero_shot_spk_id=spk_id, stream=stream)):
+                output = j["tts_speech"]
+                audio_stream = (output.numpy() * 32767).astype(np.int16).tobytes()
+                yield audio_stream
+        else:#if isinstance(text,list) or isinstance(text,Generator):
+            for _, j in enumerate(cosyvoice.inference_cross_lingual(text, '', zero_shot_spk_id=spk_id, stream=stream)):
+                if openai:
+                    yield j
+                else:
+                    output = j["tts_speech"]
+                    audio_stream = (output.numpy() * 32767).astype(np.int16).tobytes()
+                    yield audio_stream
+                    
     else:
         raise(f"{mode} mode is not supported")
 
 
-def text_generator(messages, is_cut=False, min_len=10):
+def text_generator(messages, mode:str, lang="", is_cut=False, min_len=10):
+    if mode.startswith("crosslingual") and lang:
+        yield lang
     completion = client.chat.completions.create(
         model="qwen-omni",
         messages=messages,
@@ -398,9 +443,9 @@ def text_generator(messages, is_cut=False, min_len=10):
             start = len(text)
             
             
-def rum_llm_stream_input(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', stream=True, modalities=["text"], openai=True, is_cut=False, min_len=10):
-    text = text_generator(messages,is_cut,min_len)
-    if mode=="zero-shot-with-spk-id":
+def rum_llm_stream_input(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', stream=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang=""):
+    text = text_generator(messages, mode, lang, is_cut,min_len)
+    if mode=="zero-shot-with-spk-id" or mode=="crosslingual-with-spk-id":
         prompt_speech_16k = None
     else:
         prompt_speech_16k = resample_wav_to_16khz(ref_audio_path)
@@ -462,7 +507,7 @@ def rum_llm_stream_input(messages, mode:str="zero-shot", ref_audio_path:str='ref
     if openai:
         yield "data: [DONE]\n\n"
         
-def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', stream=True, modalities=["text"], openai=True, is_cut=False, min_len=10):
+def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', stream=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang=""):
     completion = client.chat.completions.create(
         model="qwen-omni",
         messages=messages,
@@ -473,9 +518,15 @@ def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
             "request_id":None,
             }
     )
-    prompt_speech_16k = resample_wav_to_16khz(ref_audio_path)
+    if mode=="zero-shot-with-spk-id" or mode=="crosslingual-with-spk-id":
+        prompt_speech_16k = None
+    else:
+        prompt_speech_16k = resample_wav_to_16khz(ref_audio_path)
     #以下做OpenAI兼容
-    text = ""
+    if mode.startswith("crosslingual"):
+        text = lang
+    else:
+        text = ""
     start = 0
     punc = ",.?!，。？！"
     first = True
@@ -578,7 +629,7 @@ def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
                     yield audio_stream
             start = len(text)
             
-def run(text, mode:str="zero-shot", ref_audio_path:str='reference.wav', ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', stream_output=True, modalities=["text"], openai=True, is_cut=False, min_len=10):
+def run(text, mode:str="zero-shot", ref_audio_path:str='reference.wav', ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', stream_output=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang=""):
     prompt_speech_16k = resample_wav_to_16khz(ref_audio_path)
     for audio_stream in inference(mode, spk_id, text, ref_text, prompt_speech_16k, stream_output):
         yield audio_stream
@@ -597,9 +648,10 @@ async def chat_completions(request: Request):
         ref_text = body.get("ref_text", "你能开那种，珍藏好多年都不褪色的发票吗")
         spk_id = body.get("spk_id", 'female')
         stream_output = body.get("stream_output", True)
+        lang = body.get("lang","")
         try:
             return StreamingResponse(
-                    run(text, mode, ref_audio_path, ref_text, spk_id, stream_output),
+                    run(text, mode, ref_audio_path, ref_text, spk_id, stream_output, lang=lang),
                     media_type="application/octet-stream"
             )   
         except Exception as e:
@@ -628,40 +680,28 @@ async def chat_completions(request: Request):
         min_len = body.get("min_len", 5)
         stream_input = body.get("stream_input", True)
         stream_output = body.get("stream_output", True)
-        '''
-        if mode=="zero-shot-with-spk-id":
-            mode="zero-shot"
-            if spk_id=="male":
-                ref_audio_path = "male_omni.wav"
-                ref_text = "对啊，猫头鹰特别，他的眼睛又大又圆，晚上还能看清楚东西呢"
-            elif spk_id=="female":
-                ref_audio_path = "female_omni.wav"
-                ref_text = "对啊，猫头鹰特别，他的眼睛又大又圆，晚上还能看清楚东西呢"
-            elif spk_id=="male_moss":
-                ref_audio_path = "male_moss.wav"
-                ref_text = "如果大家想听到更丰富更及时的直播内容，记得在周一到周五准时进入直播间和大家一起"
-        '''
+        lang = body.get("lang","")
         try:
             if stream_input:
                 if openai:
                     return StreamingResponse(
-                            rum_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len),
+                            rum_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
                             media_type="text/event-stream"
                     )
                 else:
                     return StreamingResponse(
-                            rum_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len),
+                            rum_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
                             media_type="application/octet-stream"
                     )
             else:
                 if openai:
                     return StreamingResponse(
-                        run_llm(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len),
+                        run_llm(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
                         media_type="text/event-stream"
                     ) 
                 else:       
                     return StreamingResponse(
-                        run_llm(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len),
+                        run_llm(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
                         media_type="application/octet-stream"
                     )
                 
@@ -691,40 +731,28 @@ async def chat_completions(request: Request):
         min_len = body.get("min_len", 5)
         stream_input = body.get("stream_input", True)
         stream_output = body.get("stream_output", True)
-        '''
-        if mode=="zero-shot-with-spk-id":
-            mode="zero-shot"
-            if spk_id=="male":
-                ref_audio_path = "male_omni.wav"
-                ref_text = "对啊，猫头鹰特别，他的眼睛又大又圆，晚上还能看清楚东西呢"
-            elif spk_id=="female":
-                ref_audio_path = "female_omni.wav"
-                ref_text = "对啊，猫头鹰特别，他的眼睛又大又圆，晚上还能看清楚东西呢"
-            elif spk_id=="male_moss":
-                ref_audio_path = "male_moss.wav"
-                ref_text = "如果大家想听到更丰富更及时的直播内容，记得在周一到周五准时进入直播间和大家一起"
-        '''
+        lang = body.get("lang","")
         try:
             if stream_input:
                 if openai:
                     return StreamingResponse(
-                            rum_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len),
+                            rum_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
                             media_type="text/event-stream"
                     )
                 else:
                     return StreamingResponse(
-                            rum_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len),
+                            rum_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
                             media_type="application/octet-stream"
                     )
             else:
                 if openai:
                     return StreamingResponse(
-                        run_llm(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len),
+                        run_llm(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
                         media_type="text/event-stream"
                     ) 
                 else:       
                     return StreamingResponse(
-                        run_llm(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len),
+                        run_llm(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
                         media_type="application/octet-stream"
                     )
         except Exception as e:
