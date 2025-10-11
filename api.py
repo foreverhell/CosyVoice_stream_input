@@ -49,16 +49,26 @@ args = parser.parse_args()
 
 client = None
 cosyvoice = None
+version = "v3"
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     global cosyvoice, client
     # init engine
     try:
-        client = OpenAI(
-            # 若没有配置环境变量，请用阿里云百炼API Key将下行替换为：api_key="sk-xxx",
-            api_key="EMPTY",
-            base_url='http://192.168.1.245:8901/',
-        )
+        if version == "v3":
+            client = OpenAI(
+                # 若没有配置环境变量，请用阿里云百炼API Key将下行替换为：api_key="sk-xxx",
+                api_key="EMPTY",
+                base_url='http://127.0.0.1:8901/v1',#http://192.168.1.245:8901/
+            )
+        elif version == "v2":
+            client = OpenAI(
+                # 若没有配置环境变量，请用阿里云百炼API Key将下行替换为：api_key="sk-xxx",
+                api_key="EMPTY",
+                base_url='http://192.168.1.245:8901/',#http://192.168.1.245:8901/
+            )
+        else:
+            Warning("Qwen-Omni version is not supported")
     except:
         Warning("Qwen-Omni server has not been started")
     cosyvoice = CosyVoice2(args.model, load_jit=True, load_trt=True, load_vllm=True, fp16=True)
@@ -405,14 +415,10 @@ def text_generator(messages, mode:str, lang="", is_cut=False, min_len=10):
     if mode.startswith("crosslingual") and lang:
         yield lang
     completion = client.chat.completions.create(
-        model="qwen-omni",
+        model="/mnt/diskhd/Backup/DownloadModel/Qwen3-Omni-30B-A3B-Instruct/",
         messages=messages,
         stream=True,
         modalities=["text"],
-        extra_body={
-            "is_first":False,
-            "request_id":None,
-            }
     )
     #以下做OpenAI兼容
     text = ""
@@ -441,10 +447,10 @@ def text_generator(messages, mode:str, lang="", is_cut=False, min_len=10):
             print(text[start:])
             yield text[start:]
             start = len(text)
-            
-            
-def rum_llm_stream_input(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', stream=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang=""):
-    text = text_generator(messages, mode, lang, is_cut,min_len)
+
+###################### 文本必须等到第一个音频chunk生成才会输出 ########################
+def run_llm_stream_input0(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', stream=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang=""):
+    text = text_generator(messages, mode, lang, is_cut,min_len)    
     if mode=="zero-shot-with-spk-id" or mode=="crosslingual-with-spk-id":
         prompt_speech_16k = None
     else:
@@ -456,24 +462,25 @@ def rum_llm_stream_input(messages, mode:str="zero-shot", ref_audio_path:str='ref
         #当前text已经被消费掉了
         if openai:
             output_text, audio = audio_stream.get("text"), audio_stream.get("tts_speech")
-            output_text = "".join(output_text)
-            if output_text[start:]:
-                chunk = ChatCompletionChunk(
-                    id=f"",
-                    created=int(time.time()),
-                    model="",
-                    choices=[
-                        Choice(
-                            index=0,
-                            delta=Delta(
-                                content=output_text[start:]
-                            ),
-                            finish_reason=None
-                        )
-                    ]
-                )
-                yield f"data: {json.dumps(chunk.dict())}\n\n"
-                start = len(output_text)
+            if output_text is not None:
+                output_text = "".join(output_text)
+                if output_text[start:]:
+                    chunk = ChatCompletionChunk(
+                        id=f"",
+                        created=int(time.time()),
+                        model="",
+                        choices=[
+                            Choice(
+                                index=0,
+                                delta=Delta(
+                                    content=output_text[start:]
+                                ),
+                                finish_reason=None
+                            )
+                        ]
+                    )
+                    yield f"data: {json.dumps(chunk.dict())}\n\n"
+                    start = len(output_text)
             if audio is not None:
                 audio_stream = (audio.numpy() * 32767).astype(np.int16).tobytes()
                 #音频
@@ -506,17 +513,375 @@ def rum_llm_stream_input(messages, mode:str="zero-shot", ref_audio_path:str='ref
             yield audio_stream
     if openai:
         yield "data: [DONE]\n\n"
+    
+from collections import deque
+
+# =========================
+# 方案2: 并行流处理，但是2次llm推理
+# =========================
+import queue, threading
+def run_llm_stream_input_independent(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
+                                 ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', 
+                                 stream=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang=""):
+    """
+    并行的方案：文本和音频完全独立生成，但是2次llm推理
+    """
+    print("使用真正并行方案...")
+    
+    # 创建两个完全独立的文本生成器。相当于让llm做2次文本推理
+    def create_text_gen():
+        return text_generator(messages, mode, lang, is_cut, min_len)
+    
+    # 输出队列
+    output_queue = queue.Queue(maxsize=200)
+    
+    # 文本处理线程
+    def text_processor():
+        try:
+            print("文本处理线程启动...")
+            text_count = 0
+            for text_chunk in create_text_gen():
+                print(f"文本线程生成块 {text_count}: {text_chunk[:50]}...")
+                text_count += 1
+                
+                if openai:
+                    chunk = ChatCompletionChunk(
+                        id=f"",
+                        created=int(time.time()),
+                        model="",
+                        choices=[Choice(
+                            index=0,
+                            delta=Delta(content=text_chunk),
+                            finish_reason=None
+                        )]
+                    )
+                    output_queue.put(('text', f"data: {json.dumps(chunk.dict())}\n\n"))
+                else:
+                    output_queue.put(('text', text_chunk))
+            
+            print(f"文本处理完成，共 {text_count} 块")
+            output_queue.put(('text_done', None))
+            
+        except Exception as e:
+            print(f"文本处理错误: {e}")
+            output_queue.put(('text_error', str(e)))
+    
+    # 音频处理线程  
+    def audio_processor():
+        try:
+            print("音频处理线程启动...")
+            
+            if mode=="zero-shot-with-spk-id" or mode=="crosslingual-with-spk-id":
+                prompt_speech_16k = None
+            else:
+                prompt_speech_16k = resample_wav_to_16khz(ref_audio_path)
+            
+            audio_count = 0
+            # 创建独立的文本生成器给inference
+            for audio_result in inference(mode, spk_id, create_text_gen(), ref_text, prompt_speech_16k, stream, openai):
+                print(f"音频线程生成块 {audio_count}")
+                audio_count += 1
+                
+                if openai and audio_result.get("tts_speech") is not None:
+                    audio = audio_result.get("tts_speech")
+                    audio_stream_data = (audio.numpy() * 32767).astype(np.int16).tobytes()
+                    
+                    with io.BytesIO() as audio_io:
+                        audio_io.write(audio_stream_data)
+                        audio_io.seek(0)
+                        audio_base64 = base64.b64encode(audio_io.read()).decode('ascii')
+                    
+                    chunk = ChatCompletionChunk(
+                        id=f"",
+                        created=int(time.time()),
+                        model="",
+                        choices=[Choice(
+                            index=0,
+                            delta=Delta(audio={
+                                "data": audio_base64,
+                                "transcript": ""
+                            }),
+                            finish_reason=None
+                        )]
+                    )
+                    output_queue.put(('audio', f"data: {json.dumps(chunk.dict())}\n\n"))
+                elif not openai:
+                    output_queue.put(('audio', audio_result))
+            
+            print(f"音频处理完成，共 {audio_count} 块")
+            output_queue.put(('audio_done', None))
+            
+        except Exception as e:
+            print(f"音频处理错误: {e}")
+            import traceback
+            traceback.print_exc()
+            output_queue.put(('audio_error', str(e)))
+    
+    # 启动两个处理线程
+    text_thread = threading.Thread(target=text_processor)
+    audio_thread = threading.Thread(target=audio_processor)
+    
+    text_thread.daemon = True
+    audio_thread.daemon = True
+    
+    text_thread.start()
+    audio_thread.start()
+    
+    # 主流程：按顺序返回结果
+    def output_stream():
+        text_done = False
+        audio_done = False
         
+        while not (text_done and audio_done):
+            try:
+                msg_type, content = output_queue.get(timeout=1.0)
+                
+                if msg_type == 'text':
+                    yield content
+                elif msg_type == 'audio':
+                    yield content
+                elif msg_type == 'text_done':
+                    text_done = True
+                    print("文本流标记完成")
+                elif msg_type == 'audio_done':
+                    audio_done = True
+                    print("音频流标记完成")
+                elif msg_type in ['text_error', 'audio_error']:
+                    print(f"处理错误: {content}")
+                    break
+                    
+            except queue.Empty:
+                print("输出队列超时等待...")
+                continue
+        
+        if openai:
+            yield "data: [DONE]\n\n"
+        
+        print("所有处理完成")
+    
+    return output_stream()
+
+# =========================
+# 方案1: 流式缓存分发器 (推荐)
+# =========================
+class StreamBuffer:
+    """
+    流式缓存器 - 核心思路：
+    1. LLM生成文本时立即返回给客户端
+    2. 同时缓存到buffer供后续音频处理使用
+    3. 确保LLM只推理一次
+    """
+    
+    def __init__(self):
+        self.buffer = deque()
+        self.finished = False
+        self.error = None
+        self.lock = threading.Lock()
+        self.new_data_event = threading.Event()
+    
+    def add_chunk(self, chunk):
+        """添加新的文本块"""
+        with self.lock:
+            self.buffer.append(chunk)
+            self.new_data_event.set()
+    
+    def mark_finished(self):
+        """标记生成完成"""
+        with self.lock:
+            self.finished = True
+            self.new_data_event.set()
+    
+    def mark_error(self, error):
+        """标记生成错误"""
+        with self.lock:
+            self.error = error
+            self.finished = True
+            self.new_data_event.set()
+    
+    def create_reader(self, name="reader"):
+        """创建一个读取器，从buffer中读取数据"""
+        def reader_gen():
+            index = 0
+            print(f"{name} 开始读取...")
+            
+            while True:
+                with self.lock:
+                    # 读取可用的新数据
+                    while index < len(self.buffer):
+                        chunk = self.buffer[index]
+                        index += 1
+                        print(f"{name} 读取块 {index-1}: {str(chunk)[:30]}...")
+                        yield chunk
+                    
+                    # 检查是否完成
+                    if self.error:
+                        raise Exception(f"生成错误: {self.error}")
+                    
+                    if self.finished:
+                        print(f"{name} 读取完成，共读取 {index} 块")
+                        break
+                
+                # 等待新数据
+                self.new_data_event.wait(timeout=5.0)
+                self.new_data_event.clear()
+        
+        return reader_gen()
+
+def run_llm_stream_input(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
+                                       ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', 
+                                       stream=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang=""):
+    """
+    方案1: 使用流式缓存器
+    - LLM只推理一次
+    - 文本立即流式返回
+    - 同时缓存供音频处理
+    """
+    print("使用流式缓存器方案 (单次LLM推理)...")
+    
+    # 创建流式缓存器
+    stream_buffer = StreamBuffer()
+    
+    # 音频结果队列
+    audio_queue = queue.Queue(maxsize=100)
+    
+    # 音频处理线程
+    def audio_processor():
+        try:
+            print("音频处理线程启动，等待文本数据...")
+            
+            # 准备TTS参数
+            if mode=="zero-shot-with-spk-id" or mode=="crosslingual-with-spk-id":
+                prompt_speech_16k = None
+            else:
+                prompt_speech_16k = resample_wav_to_16khz(ref_audio_path)
+            
+            # 从缓存器获取文本流
+            inference_text_gen = stream_buffer.create_reader("inference")
+            
+            print("开始TTS推理...")
+            audio_count = 0
+            for audio_result in inference(mode, spk_id, inference_text_gen, ref_text, prompt_speech_16k, stream, openai):
+                print(f"生成音频块 {audio_count}")
+                audio_count += 1
+                audio_queue.put(('audio', audio_result))
+            
+            print(f"音频处理完成，共生成 {audio_count} 块")
+            audio_queue.put(('done', None))
+            
+        except Exception as e:
+            print(f"音频处理错误: {e}")
+            import traceback
+            traceback.print_exc()
+            audio_queue.put(('error', str(e)))
+    
+    # 启动音频处理线程
+    audio_thread = threading.Thread(target=audio_processor)
+    audio_thread.daemon = True
+    audio_thread.start()
+    
+    # 主流程
+    def combined_stream():
+        try:
+            print("开始LLM推理和文本流式返回...")
+            text_count = 0
+            
+            # LLM推理一次，同时返回和缓存
+            for text_chunk in text_generator(messages, mode, lang, is_cut, min_len):
+                print(f"LLM生成文本块 {text_count}: {text_chunk[:50]}...")
+                text_count += 1
+                
+                # 立即缓存供音频处理
+                stream_buffer.add_chunk(text_chunk)
+                
+                # 立即返回给客户端
+                if openai:
+                    chunk = ChatCompletionChunk(
+                        id=f"",
+                        created=int(time.time()),
+                        model="",
+                        choices=[Choice(
+                            index=0,
+                            delta=Delta(content=text_chunk),
+                            finish_reason=None
+                        )]
+                    )
+                    yield f"data: {json.dumps(chunk.dict())}\n\n"
+                else:
+                    yield text_chunk
+            
+            # 标记LLM生成完成
+            stream_buffer.mark_finished()
+            print(f"LLM推理完成，共生成 {text_count} 块文本")
+            
+        except Exception as e:
+            print(f"LLM推理错误: {e}")
+            stream_buffer.mark_error(str(e))
+            return
+        
+        # 现在处理音频流
+        print("LLM文本流结束，等待音频流...")
+        audio_finished = False
+        audio_count = 0
+        
+        while not audio_finished:
+            try:
+                msg_type, content = audio_queue.get(timeout=3.0)
+                
+                if msg_type == 'done':
+                    audio_finished = True
+                    print("音频流完成")
+                elif msg_type == 'error':
+                    print(f"音频错误: {content}")
+                    audio_finished = True
+                elif msg_type == 'audio':
+                    audio_count += 1
+                    print(f"返回音频块 {audio_count}")
+                    
+                    if openai and content.get("tts_speech") is not None:
+                        audio = content.get("tts_speech")
+                        audio_stream_data = (audio.numpy() * 32767).astype(np.int16).tobytes()
+                        
+                        with io.BytesIO() as audio_io:
+                            audio_io.write(audio_stream_data)
+                            audio_io.seek(0)
+                            audio_base64 = base64.b64encode(audio_io.read()).decode('ascii')
+                        
+                        chunk = ChatCompletionChunk(
+                            id=f"",
+                            created=int(time.time()),
+                            model="",
+                            choices=[Choice(
+                                index=0,
+                                delta=Delta(audio={
+                                    "data": audio_base64,
+                                    "transcript": ""
+                                }),
+                                finish_reason=None
+                            )]
+                        )
+                        yield f"data: {json.dumps(chunk.dict())}\n\n"
+                    elif not openai:
+                        yield content
+                        
+            except queue.Empty:
+                print("音频队列超时...")
+                if not audio_thread.is_alive():
+                    print("音频线程已结束")
+                    break
+        
+        print(f"所有处理完成。文本: {text_count} 块, 音频: {audio_count} 块")
+        
+        if openai:
+            yield "data: [DONE]\n\n"
+    
+    return combined_stream()
+
 def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', stream=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang=""):
     completion = client.chat.completions.create(
-        model="qwen-omni",
+        model="/mnt/diskhd/Backup/DownloadModel/Qwen3-Omni-30B-A3B-Instruct/",
         messages=messages,
         stream=True,
         modalities=["text"],
-        extra_body={
-            "is_first":False,
-            "request_id":None,
-            }
     )
     if mode=="zero-shot-with-spk-id" or mode=="crosslingual-with-spk-id":
         prompt_speech_16k = None
@@ -685,12 +1050,12 @@ async def chat_completions(request: Request):
             if stream_input:
                 if openai:
                     return StreamingResponse(
-                            rum_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
+                            run_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
                             media_type="text/event-stream"
                     )
                 else:
                     return StreamingResponse(
-                            rum_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
+                            run_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
                             media_type="application/octet-stream"
                     )
             else:
@@ -729,19 +1094,19 @@ async def chat_completions(request: Request):
         openai = body.get("openai", True)
         is_cut = body.get("is_cut", False)
         min_len = body.get("min_len", 5)
-        stream_input = body.get("stream_input", True)
+        stream_input = body.get("stream_input", True) #写死，万一改成False结果流式输入
         stream_output = body.get("stream_output", True)
         lang = body.get("lang","")
         try:
             if stream_input:
                 if openai:
                     return StreamingResponse(
-                            rum_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
+                            run_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
                             media_type="text/event-stream"
                     )
                 else:
                     return StreamingResponse(
-                            rum_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
+                            run_llm_stream_input(messages, mode, ref_audio_path, ref_text, spk_id, stream_output, modalities, openai, is_cut, min_len, lang),
                             media_type="application/octet-stream"
                     )
             else:
