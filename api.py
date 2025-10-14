@@ -50,6 +50,7 @@ args = parser.parse_args()
 client = None
 cosyvoice = None
 version = "v3"
+special_token = "))))"
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     global cosyvoice, client
@@ -432,6 +433,7 @@ def text_generator(messages, mode:str, lang="", is_cut=False, min_len=10):
         messages=messages,
         stream=True,
         modalities=["text"],
+        temperature=0.1
     )
     #以下做OpenAI兼容
     text = ""
@@ -895,6 +897,7 @@ def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
         messages=messages,
         stream=True,
         modalities=["text"],
+        temperature=0.1
     )
     if mode=="zero-shot-with-spk-id" or mode=="crosslingual-with-spk-id":
         prompt_speech_16k = None
@@ -931,7 +934,7 @@ def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
                     ]
                 )
                 yield f"data: {json.dumps(chunk.dict())}\n\n"
-            if pause or chunk.choices[0].delta.content == "<|dream|>":
+            if pause or chunk.choices[0].delta.content == special_token:
                 pause = True
             else:
                 text += chunk.choices[0].delta.content
