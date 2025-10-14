@@ -410,7 +410,20 @@ def inference(mode, spk_id, text, ref_text, prompt_speech_16k, stream=True, open
     else:
         raise(f"{mode} mode is not supported")
 
-
+def format_message(messages):
+    if version=="v3":
+        for message in messages:
+            contents = message["content"]
+            if isinstance(contents,list):
+                for content in contents:
+                    if content["type"] == "audio":
+                        content["type"] = "input_audio"
+                        content["input_audio"] = {}
+                        if content["audio"].startswith("data:audio"):#如果带头，把头去掉
+                            content["audio"] = content["audio"].split(',', 1)[1]
+                        content["input_audio"]["data"] = content["audio"]
+                        content["input_audio"]["format"] = "wav"
+    return messages
 def text_generator(messages, mode:str, lang="", is_cut=False, min_len=10):
     if mode.startswith("crosslingual") and lang:
         yield lang
@@ -1034,6 +1047,7 @@ async def chat_completions(request: Request):
         body = await request.json()
         # 获取必需字段
         messages = body.get("messages",None)
+        messages = format_message(messages)
         modalities = body.get("modalities",["audio"])
         
         mode = body.get("mode", "zero-shot-with-spk-id")
@@ -1085,6 +1099,8 @@ async def chat_completions(request: Request):
         body = await request.json()
         # 获取必需字段
         messages = body.get("messages",None)
+        messages = format_message(messages)
+        #print(messages[1]["content"].keys())
         modalities = body.get("modalities",["text","audio"])
         
         mode = body.get("mode", "zero-shot-with-spk-id")
