@@ -43,14 +43,16 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model', type=str, default="/mnt/disk2/home/yiyangzhe/CosyVoice_stream_input/pretrained_models/CosyVoice2-0.5B/")#"../CosyVoice_stream_input/pretrained_models/CosyVoice2-0.5B"
 #server
 parser.add_argument('--host', type=str, default='0.0.0.0', help="服务器监听地址")
-parser.add_argument('--port', type=int, default=9880, help="服务器监听端口")
+parser.add_argument('--port', type=int, default=9881, help="服务器监听端口")
+parser.add_argument('--version', type=str, default="v3", help="version")#尽量少修改代码，通过配置去影响代码行为
 
 args = parser.parse_args()
 
 client = None
 cosyvoice = None
-version = "v3"
-special_token = "))))"
+version = args.version#"v3"
+special_token = "))))" if version=="v3" else "<|dream|>"
+args.port = 9881 if version=="v3" else 9880
 @asynccontextmanager
 async def lifespan(app:FastAPI):
     global cosyvoice, client
@@ -60,7 +62,7 @@ async def lifespan(app:FastAPI):
             client = OpenAI(
                 # 若没有配置环境变量，请用阿里云百炼API Key将下行替换为：api_key="sk-xxx",
                 api_key="EMPTY",
-                base_url='http://127.0.0.1:8901/v1',#http://192.168.1.245:8901/
+                base_url='http://127.0.0.1:8902/v1',#http://192.168.1.245:8901/
             )
         elif version == "v2":
             client = OpenAI(
@@ -288,7 +290,8 @@ async def stream_response(queue):
 
 
 def inference(mode, spk_id, text, ref_text, prompt_speech_16k, stream=True, openai=False, modalities = ["audio"]):
-    set_all_random_seed(random.randint(1,1e4))
+    print("inference text", text)
+    #set_all_random_seed(random.randint(1,1e4))
     #这个在阻塞获得文本
     if mode=="sft":
         if spk_id=="":
@@ -315,12 +318,12 @@ def inference(mode, spk_id, text, ref_text, prompt_speech_16k, stream=True, open
             yield audio_stream    
     elif mode=="zero-shot":
         if isinstance(text,str):
-            for _, j in enumerate(cosyvoice.inference_zero_shot(text, ref_text, prompt_speech_16k, stream=stream)):
+            for _, j in enumerate(cosyvoice.inference_zero_shot(text, ref_text, prompt_speech_16k, zero_shot_spk_id="", stream=stream)):
                 output = j["tts_speech"]
                 audio_stream = (output.numpy() * 32767).astype(np.int16).tobytes()
                 yield audio_stream
         else:#if isinstance(text,list) or isinstance(text,Generator):
-            for _, j in enumerate(cosyvoice.inference_zero_shot(text, ref_text, prompt_speech_16k, stream=stream)):
+            for _, j in enumerate(cosyvoice.inference_zero_shot(text, ref_text, prompt_speech_16k, zero_shot_spk_id="", stream=stream)):
                 if openai:
                     yield j
                 else:
@@ -912,6 +915,7 @@ def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
     punc = ",.?!，。？！"
     first = True
     pause = False
+    index = 0
     for chunk in completion:
         if first:
             min_lens = 5
@@ -947,8 +951,13 @@ def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
                     #for audio_stream in inference(mode, spk_id, text, start, "你能开那种", first_audio):
                     #    yield audio_stream
                 #else:
+                print(text[start:])
                 for audio_stream in inference(mode, spk_id, text[start:], ref_text, prompt_speech_16k, stream):
                     if openai:
+                        index = index + 1
+                        print("返回的音频片段",index)
+                        #audio_np = np.frombuffer(audio_stream, dtype=np.int16)
+                        #sf.write(f"tmp{index}.wav", audio_np, samplerate=24000)
                         with io.BytesIO() as audio_io:
                             #sf.write(audio_io, audio_data, 24000, format='RAW', subtype="PCM_16")#不能以WAV打包，包含头信息，只能分段播放
                             audio_io.write(audio_stream)
@@ -962,7 +971,7 @@ def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
                             model="",
                             choices=[
                                 Choice(
-                                    index=0,
+                                    index=index,
                                     delta=Delta(
                                         audio={
                                             "data": audio_base64,
@@ -978,8 +987,15 @@ def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
                         yield audio_stream
                 start = len(text)
         elif start != len(text):#推理最后一段可能长度不够的
+            print(text[start:])
             for audio_stream in inference(mode, spk_id, text[start:], ref_text, prompt_speech_16k, stream):
+                #走的都是这里，没走上面
+                #这里tts是流式返回，一次只有一个音频片段，不是所有文本的音频片段，只返回了第一个音频片段后 yield "data: [DONE]\n\n"，导致后面没有返回给客户端
                 if openai:
+                    index = index + 1
+                    print("最后返回的音频片段",index)
+                    #audio_np = np.frombuffer(audio_stream, dtype=np.int16)
+                    #sf.write(f"tmp{index}.wav", audio_np, samplerate=24000)
                     with io.BytesIO() as audio_io:
                         #sf.write(audio_io, audio_data, 24000, format='RAW', subtype="PCM_16")#不能以WAV打包，包含头信息，只能分段播放
                         audio_io.write(audio_stream)
@@ -993,7 +1009,7 @@ def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
                         model="",
                         choices=[
                             Choice(
-                                index=0,
+                                index=index,
                                 delta=Delta(
                                     audio={
                                         "data": audio_base64,
@@ -1005,10 +1021,11 @@ def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
                         ]
                     )
                     yield f"data: {json.dumps(chunk.dict())}\n\n"
-                    yield "data: [DONE]\n\n"
                 else:
                     yield audio_stream
             start = len(text)
+            if openai:
+                yield "data: [DONE]\n\n"
             
 def run(text, mode:str="zero-shot", ref_audio_path:str='reference.wav', ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', stream_output=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang=""):
     prompt_speech_16k = resample_wav_to_16khz(ref_audio_path)
@@ -1054,13 +1071,17 @@ async def chat_completions(request: Request):
         modalities = body.get("modalities",["audio"])
         
         mode = body.get("mode", "zero-shot-with-spk-id")
-        ref_audio_path = body.get("ref_audio_path", "reference.wav")
-        ref_text = body.get("ref_text", "你能开那种，珍藏好多年都不褪色的发票吗")
+        ref_audio_path = body.get("ref_audio_path", "asset/zero_shot_prompt.wav")
+        ref_text = body.get("ref_text", "希望你以后能够做的比我还好呦。")
         spk_id = body.get("spk_id", 'female')
+        #if spk_id == "female":#女性，转成zero-shot，用这个参考音频
+        #    mode = "zero-shot"
+        #    ref_audio_path = "asset/zero_shot_prompt.wav"
+        #    ref_text = "希望你以后能够做的比我还好呦。"
         openai = body.get("openai", False)
         is_cut = body.get("is_cut", False)
         min_len = body.get("min_len", 5)
-        stream_input = body.get("stream_input", True)
+        stream_input = body.get("stream_input", True) #写死，流式输入会导致数字发音有错
         stream_output = body.get("stream_output", True)
         lang = body.get("lang","")
         try:
@@ -1103,17 +1124,20 @@ async def chat_completions(request: Request):
         # 获取必需字段
         messages = body.get("messages",None)
         messages = format_message(messages)
-        #print(messages[1]["content"].keys())
         modalities = body.get("modalities",["text","audio"])
         
         mode = body.get("mode", "zero-shot-with-spk-id")
-        ref_audio_path = body.get("ref_audio_path", "reference.wav")
-        ref_text = body.get("ref_text", "你能开那种，珍藏好多年都不褪色的发票吗")
+        ref_audio_path = body.get("ref_audio_path", "asset/zero_shot_prompt.wav")
+        ref_text = body.get("ref_text", "希望你以后能够做的比我还好呦。")
         spk_id = body.get("spk_id", 'female')
+        #if spk_id == "female":#女性，转成zero-shot，用这个参考音频
+        #    mode = "zero-shot"
+        #    ref_audio_path = "asset/zero_shot_prompt.wav"
+        #    ref_text = "希望你以后能够做的比我还好呦。"            
         openai = body.get("openai", True)
         is_cut = body.get("is_cut", False)
         min_len = body.get("min_len", 5)
-        stream_input = body.get("stream_input", True) #写死，万一改成False结果流式输入
+        stream_input = False #body.get("stream_input", True) #写死，流式输入会导致数字发音有错
         stream_output = body.get("stream_output", True)
         lang = body.get("lang","")
         try:
