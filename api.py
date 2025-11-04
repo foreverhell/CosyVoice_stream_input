@@ -942,6 +942,7 @@ def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
                 pause = True
             else:
                 text += chunk.choices[0].delta.content
+
             #text and text[-1] in punc and 
             if (text and text[-1] in punc and ((not is_cut) or (len(text)-start >= min_lens))):#10个中文字符/在标点处做推理；英文不能按照字符，应该按照
                 if first:
@@ -1137,7 +1138,7 @@ async def chat_completions(request: Request):
         openai = body.get("openai", True)
         is_cut = body.get("is_cut", False)
         min_len = body.get("min_len", 5)
-        stream_input = False #body.get("stream_input", True) #写死，流式输入会导致数字发音有错
+        stream_input = body.get("stream_input", True) #写死，流式输入会导致数字发音有错
         stream_output = body.get("stream_output", True)
         lang = body.get("lang","")
         try:
@@ -1184,7 +1185,27 @@ async def chat_completions(messages:list=None, modalities:list=["text"], mode:st
             logger.exception('Error {e} in run_cosyvoice_engine')
     except:
         logger.exception('Error {e} in run_cosyvoice_engine')
+        
+def fronted(text:str, is_generated:bool = False):
+    normalized_text = cosyvoice.frontend.text_normalize(text)
+    print(normalized_text)
+    return normalized_text
 
+@app.get("/fronted")
+async def chat_completions(text:str, is_generated:bool = False):
+    """兼容OpenAI格式的聊天补全API"""
+    try:             
+        # 准备提示
+        try:
+            return StreamingResponse(
+                    fronted(text, is_generated),
+                    media_type="application/octet-stream"
+            )   
+        except Exception as e:
+            logger.exception('Error {e} in run_cosyvoice_engine')
+    except:
+        logger.exception('Error {e} in run_cosyvoice_engine')
+        
 def main():
     import uvicorn
     uvicorn.run(app, host=args.host, port=args.port)
