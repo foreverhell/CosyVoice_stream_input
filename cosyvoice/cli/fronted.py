@@ -74,12 +74,14 @@ class CosyVoiceFrontEnd:
 
     def _extract_text_token_generator(self, text_generator):
         consumed_texts = []  # 保存消费的文本
-        
+        version = "v3"
+        special_token = "))))" if version=="v3" else "<|dream|>"
         def token_generator():
             pause = False
             for text in text_generator:
+                #text = self.text_normalize(text)
                 consumed_texts.append(text)  # 保存每个消费的文本
-                if pause or consumed_texts[-1] == "<|dream|>":
+                if pause or consumed_texts[-1] == special_token:
                     pause = True
                 else:
                     text_token, _ = self._extract_text_token(text)
@@ -136,6 +138,10 @@ class CosyVoiceFrontEnd:
         speech_feat_len = torch.tensor([speech_feat.shape[1]], dtype=torch.int32).to(self.device)
         return speech_feat, speech_feat_len
 
+    def preprocess(self, text:Generator):
+        for t in text:
+            yield t
+            
     def text_normalize(self, text, split=True, text_frontend=True):
         if isinstance(text, Generator):
             logging.info('get tts_text generator, will skip text_normalize!')
@@ -147,7 +153,68 @@ class CosyVoiceFrontEnd:
             texts = [i["text"] for i in json.loads(self.frd.do_voicegen_frd(text))["sentences"]]
             text = ''.join(texts)
         else:
+            #数字转换
+            from analyze_number import analyze_text
+            try:
+                text,_ = analyze_text(text) #整体读
+                print(text)
+            except:
+                pass
+            #语言检测
+            import sys
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            from text.cleaner import clean_text
+            from text.LangSegmenter.langsegmenter import LangSegmenter
+            langlist,textlist = [],[]
+            for tmp in LangSegmenter.getTexts(text):
+                langlist.append(tmp["lang"])
+                textlist.append(tmp["text"])
+            norm_text_list = []
+            for i in range(len(textlist)):
+                lang = langlist[i]
+                _, _, text = clean_text(textlist[i], lang, "v2")
+                print(lang)
+                if lang == "zh":                        
+                    from text.chinese2 import text_normalize as text_normalize_zh
+                    #text = clean_text(text)
+                    text = text_normalize_zh(text)
+                    text = self.zh_tn_model.normalize(text)
+                    text = text.replace("\n", "")
+                    text = replace_blank(text)
+                    text = replace_corner_mark(text)
+                    text = text.replace(".", "。")
+                    text = text.replace(" - ", "，")
+                    text = remove_bracket(text)
+                    text = re.sub(r'[，,、]+$', '。', text)
+                    texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "zh", token_max_n=80,
+                                                token_min_n=60, merge_len=20, comma_split=False))
+                else:#if lang == "en":
+                    text = self.en_tn_model.normalize(text)
+                    text = spell_out_number(text, self.inflect_parser)
+                    texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "en", token_max_n=80,
+                                                token_min_n=60, merge_len=20, comma_split=False))                    
+                
+                norm_text_list.append("".join(texts))
+        texts = [i for i in norm_text_list if not is_only_punctuation(i)]
+        return texts if split is True else text
+    
+    
+    def text_normalize0(self, text, split=True, text_frontend=True):
+        if isinstance(text, Generator):
+            logging.info('get tts_text generator, will skip text_normalize!')
+            return [text]
+        if text_frontend is False or text == '':
+            return [text] if split is True else text
+        text = text.strip()
+        if self.use_ttsfrd:
+            texts = [i["text"] for i in json.loads(self.frd.do_voicegen_frd(text))["sentences"]]
+            text = ''.join(texts)
+        else:
             if contains_chinese(text):
+                from text.chinese2 import text_normalize as text_normalize_zh
+                #text = clean_text(text)
+                text = text_normalize_zh(text)
+                
                 text = self.zh_tn_model.normalize(text)
                 text = text.replace("\n", "")
                 text = replace_blank(text)
@@ -165,7 +232,7 @@ class CosyVoiceFrontEnd:
                                              token_min_n=60, merge_len=20, comma_split=False))
         texts = [i for i in texts if not is_only_punctuation(i)]
         return texts if split is True else text
-
+    
     def frontend_sft(self, tts_text, spk_id):
         tts_text_token, tts_text_token_len = self._extract_text_token(tts_text)
         embedding = self.spk2info[spk_id]['embedding']
