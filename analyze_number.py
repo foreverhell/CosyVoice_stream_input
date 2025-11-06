@@ -22,7 +22,7 @@ def should_read_digit_by_digit(text, number, context_before, context_after):
         return False
     
     # 电话号码，按位读
-    if digit_count in [7, 8, 11, 13] and any(kw in context_before for kw in ['电话', '手机', '联系']):
+    if any(kw in context_before for kw in ['电话', '手机', '联系']) or digit_count in [3, 7, 8, 11, 12]:#110, 120这种特殊电话长度为3，座机为7、8（带区号为11、12），手机为11
         return True
     
     # 年份，按位读
@@ -34,7 +34,7 @@ def should_read_digit_by_digit(text, number, context_before, context_after):
         except:
             pass
         
-    if digit_count == 2:
+    if digit_count == 1 or digit_count == 2:
         try:
             year = int(number)
             if 1 <= year <= 12 and '月' in context_after[:1]:#月，十进制读
@@ -90,14 +90,15 @@ def analyze_text(text):
         
         context_before = text[max(0, start-15):start]
         context_after = text[end:min(len(text), end+15)]
-        
         is_digit_reading = should_read_digit_by_digit(
             text, number, context_before, context_after
         )
         if is_digit_reading:
-            text = context_before + read_by_digit(number) + context_after
+            #text = context_before + read_by_digit(number) + context_after
+            text = text.replace(number, read_by_digit(number))
         else:
-            text = context_before + number_to_chinese(number) + context_after
+            #text = context_before + number_to_chinese(number) + context_after
+            text = text.replace(number, number_to_chinese(number))
         results.append({
             'number': number,
             'type': "按位读" if is_digit_reading else "十进制读",
@@ -111,7 +112,7 @@ if __name__ == "__main__":
     # 测试
     test_cases = [
         "请拨打电话13800138000",
-        "我今年25岁了",
+        "我今年25岁了，它今年12岁",
         "房间号是305室",
         "2024年1月1日",
         "圆周率是3.1415926",
@@ -120,14 +121,15 @@ if __name__ == "__main__":
         "第3名获得奖金500元",
         "公交203路",
         "价格是¥199",
-        "7月28号"
+        "11月28号晚上9点",
+        "帮我电话给110和120"
     ]
 
     print("=" * 60)
     for case in test_cases:
         print(f"\n原文: {case}")
         text,results = analyze_text(case)
-        print("text",text)
         for r in results:
             print(f"  数字: {r['number']} → {r['type']}")
+        print("text",text)
     print("=" * 60)
