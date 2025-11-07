@@ -141,8 +141,57 @@ class CosyVoiceFrontEnd:
     def preprocess(self, text:Generator):
         for t in text:
             yield t
-            
-    def text_normalize(self, text, split=True, text_frontend=True):
+
+    def text_normalize(self, text, split=True, text_frontend=True, lang = "zh"):
+        if isinstance(text, Generator):
+            logging.info('get tts_text generator, will skip text_normalize!')
+            return [text]
+        if text_frontend is False or text == '':
+            return [text] if split is True else text
+        text = text.strip()
+        if self.use_ttsfrd:
+            texts = [i["text"] for i in json.loads(self.frd.do_voicegen_frd(text))["sentences"]]
+            text = ''.join(texts)
+        else:
+            import sys
+            sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+            from text.cleaner import clean_text
+            _, _, text = clean_text(text, lang, "v2")
+            if lang == "zh":
+                #数字转换
+                from analyze_number import analyze_text
+                try:
+                    text,_ = analyze_text(text) #整体读
+                    print(text)
+                except:
+                    pass
+                from text.chinese2 import text_normalize as text_normalize_zh
+                #text = clean_text(text)
+                text = text_normalize_zh(text)
+                text = self.zh_tn_model.normalize(text)
+                text = text.replace("\n", "")
+                text = replace_blank(text)
+                text = replace_corner_mark(text)
+                text = text.replace(".", "。")
+                text = text.replace(" - ", "，")
+                text = remove_bracket(text)
+                text = re.sub(r'[，,、]+$', '。', text)
+                texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "zh", token_max_n=80,
+                                            token_min_n=60, merge_len=20, comma_split=False))
+            elif lang == "en":
+                    text = self.en_tn_model.normalize(text)
+                    from analyze_number_english import analyze_english_text
+                    text,_ = analyze_english_text(text) #_是一个list，不能直接用
+                    text = spell_out_number(text, self.inflect_parser)
+                    texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "en", token_max_n=80,
+                                                token_min_n=60, merge_len=20, comma_split=False))
+            else:#自动识别语言
+                texts = self.text_normalize_auto_language(text)
+                
+        texts = [i for i in texts if not is_only_punctuation(i)]
+        return texts if split is True else text
+      
+    def text_normalize_auto_language(self, text, split=True, text_frontend=True):
         if isinstance(text, Generator):
             logging.info('get tts_text generator, will skip text_normalize!')
             return [text]
@@ -190,6 +239,8 @@ class CosyVoiceFrontEnd:
                                                 token_min_n=60, merge_len=20, comma_split=False))
                 else:#if lang == "en":
                     text = self.en_tn_model.normalize(text)
+                    #from analyze_number_english import analyze_english_text
+                    #text,_ = analyze_english_text(text) #res是一个list，不能直接用
                     text = spell_out_number(text, self.inflect_parser)
                     texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "en", token_max_n=80,
                                                 token_min_n=60, merge_len=20, comma_split=False))                    
