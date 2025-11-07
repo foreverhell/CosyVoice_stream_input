@@ -289,7 +289,7 @@ async def stream_response(queue):
         yield "data: [DONE]\n\n"
 
 
-def inference(mode, spk_id, text, ref_text, prompt_speech_16k, stream=True, openai=False, modalities = ["audio"]):
+def inference(mode, spk_id, text, ref_text, prompt_speech_16k, stream=True, openai=False, modalities = ["audio"], lang="zh"):
     print("inference text", text)
     #set_all_random_seed(random.randint(1,1e4))
     #这个在阻塞获得文本
@@ -318,12 +318,12 @@ def inference(mode, spk_id, text, ref_text, prompt_speech_16k, stream=True, open
             yield audio_stream    
     elif mode=="zero-shot":
         if isinstance(text,str):
-            for _, j in enumerate(cosyvoice.inference_zero_shot(text, ref_text, prompt_speech_16k, zero_shot_spk_id="", stream=stream)):
+            for _, j in enumerate(cosyvoice.inference_zero_shot(text, ref_text, prompt_speech_16k, zero_shot_spk_id="", stream=stream, lang=lang)):
                 output = j["tts_speech"]
                 audio_stream = (output.numpy() * 32767).astype(np.int16).tobytes()
                 yield audio_stream
         else:#if isinstance(text,list) or isinstance(text,Generator):
-            for _, j in enumerate(cosyvoice.inference_zero_shot(text, ref_text, prompt_speech_16k, zero_shot_spk_id="", stream=stream)):
+            for _, j in enumerate(cosyvoice.inference_zero_shot(text, ref_text, prompt_speech_16k, zero_shot_spk_id="", stream=stream, lang=lang)):
                 if openai:
                     yield j
                 else:
@@ -351,12 +351,12 @@ def inference(mode, spk_id, text, ref_text, prompt_speech_16k, stream=True, open
             else:
                 raise("Embedding is NEEDED!")
         if isinstance(text,str):
-            for _, j in enumerate(cosyvoice.inference_zero_shot(text, '', '', zero_shot_spk_id=spk_id, stream=stream)):
+            for _, j in enumerate(cosyvoice.inference_zero_shot(text, '', '', zero_shot_spk_id=spk_id, stream=stream, lang=lang)):
                 output = j["tts_speech"]
                 audio_stream = (output.numpy() * 32767).astype(np.int16).tobytes()
                 yield audio_stream
         else:#if isinstance(text,list) or isinstance(text,Generator):
-            for _, j in enumerate(cosyvoice.inference_zero_shot(text, '', '', zero_shot_spk_id=spk_id, stream=stream)):
+            for _, j in enumerate(cosyvoice.inference_zero_shot(text, '', '', zero_shot_spk_id=spk_id, stream=stream, lang=lang)):
                 if openai:
                     yield j
                 else:
@@ -747,7 +747,7 @@ class StreamBuffer:
 
 def run_llm_stream_input(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
                                        ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', 
-                                       stream=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang=""):
+                                       stream=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang="zh"):
     """
     方案1: 使用流式缓存器
     - LLM只推理一次
@@ -778,7 +778,7 @@ def run_llm_stream_input(messages, mode:str="zero-shot", ref_audio_path:str='ref
             
             print("开始TTS推理...")
             audio_count = 0
-            for audio_result in inference(mode, spk_id, inference_text_gen, ref_text, prompt_speech_16k, stream, openai):
+            for audio_result in inference(mode, spk_id, inference_text_gen, ref_text, prompt_speech_16k, stream, openai, modalities, lang):
                 print(f"生成音频块 {audio_count}")
                 audio_count += 1
                 audio_queue.put(('audio', audio_result))
@@ -894,7 +894,7 @@ def run_llm_stream_input(messages, mode:str="zero-shot", ref_audio_path:str='ref
     
     return combined_stream()
 
-def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', stream=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang=""):
+def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', stream=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang="zh"):
     completion = client.chat.completions.create(
         model="/mnt/diskhd/Backup/DownloadModel/Qwen3-Omni-30B-A3B-Instruct/",
         messages=messages,
@@ -953,7 +953,7 @@ def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
                     #    yield audio_stream
                 #else:
                 print(text[start:])
-                for audio_stream in inference(mode, spk_id, text[start:], ref_text, prompt_speech_16k, stream):
+                for audio_stream in inference(mode, spk_id, text[start:], ref_text, prompt_speech_16k, stream, lang=lang):
                     if openai:
                         index = index + 1
                         print("返回的音频片段",index)
@@ -989,7 +989,7 @@ def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
                 start = len(text)
         elif start != len(text):#推理最后一段可能长度不够的
             print(text[start:])
-            for audio_stream in inference(mode, spk_id, text[start:], ref_text, prompt_speech_16k, stream):
+            for audio_stream in inference(mode, spk_id, text[start:], ref_text, prompt_speech_16k, stream, lang=lang):
                 #走的都是这里，没走上面
                 #这里tts是流式返回，一次只有一个音频片段，不是所有文本的音频片段，只返回了第一个音频片段后 yield "data: [DONE]\n\n"，导致后面没有返回给客户端
                 if openai:
@@ -1028,9 +1028,9 @@ def run_llm(messages, mode:str="zero-shot", ref_audio_path:str='reference.wav', 
             if openai:
                 yield "data: [DONE]\n\n"
             
-def run(text, mode:str="zero-shot", ref_audio_path:str='reference.wav', ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', stream_output=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang=""):
+def run(text, mode:str="zero-shot", ref_audio_path:str='reference.wav', ref_text:str = '你能开那种，珍藏好多年都不褪色的发票吗', spk_id='female', stream_output=True, modalities=["text"], openai=True, is_cut=False, min_len=10, lang="zh"):
     prompt_speech_16k = resample_wav_to_16khz(ref_audio_path)
-    for audio_stream in inference(mode, spk_id, text, ref_text, prompt_speech_16k, stream_output):
+    for audio_stream in inference(mode, spk_id, text, ref_text, prompt_speech_16k, stream_output, lang=lang):
         yield audio_stream
 
 @app.post("/tts")
@@ -1047,7 +1047,7 @@ async def chat_completions(request: Request):
         ref_text = body.get("ref_text", "你能开那种，珍藏好多年都不褪色的发票吗")
         spk_id = body.get("spk_id", 'female')
         stream_output = body.get("stream_output", True)
-        lang = body.get("lang","")
+        lang = body.get("lang","zh")
         try:
             return StreamingResponse(
                     run(text, mode, ref_audio_path, ref_text, spk_id, stream_output, lang=lang),
@@ -1084,7 +1084,7 @@ async def chat_completions(request: Request):
         min_len = body.get("min_len", 5)
         stream_input = body.get("stream_input", True) #写死，流式输入会导致数字发音有错
         stream_output = body.get("stream_output", True)
-        lang = body.get("lang","")
+        lang = body.get("lang","zh")
         try:
             if stream_input:
                 if openai:
@@ -1140,7 +1140,7 @@ async def chat_completions(request: Request):
         min_len = body.get("min_len", 5)
         stream_input = body.get("stream_input", True) #写死，流式输入会导致数字发音有错
         stream_output = body.get("stream_output", True)
-        lang = body.get("lang","")
+        lang = body.get("lang","zh")
         try:
             if stream_input:
                 if openai:
@@ -1186,19 +1186,19 @@ async def chat_completions(messages:list=None, modalities:list=["text"], mode:st
     except:
         logger.exception('Error {e} in run_cosyvoice_engine')
         
-def fronted(text:str, is_generated:bool = False):
-    normalized_text = cosyvoice.frontend.text_normalize(text)
+def fronted(text:str, lang:str = "zh"):
+    normalized_text = cosyvoice.frontend.text_normalize(text, lang=lang)
     print(normalized_text)
     return normalized_text
 
 @app.get("/fronted")
-async def chat_completions(text:str, is_generated:bool = False):
+async def chat_completions(text:str, lang:str = "zh"):
     """兼容OpenAI格式的聊天补全API"""
     try:             
         # 准备提示
         try:
             return StreamingResponse(
-                    fronted(text, is_generated),
+                    fronted(text, lang),
                     media_type="application/octet-stream"
             )   
         except Exception as e:
