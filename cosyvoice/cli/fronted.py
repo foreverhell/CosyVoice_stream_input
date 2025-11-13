@@ -156,18 +156,11 @@ class CosyVoiceFrontEnd:
             import sys
             sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
             from text.cleaner import clean_text
-            _, _, text = clean_text(text, lang, "v2")
             if lang == "zh":
-                #数字转换
-                from analyze_number import analyze_text
-                try:
-                    text,_ = analyze_text(text) #整体读
-                    print(text)
-                except:
-                    pass
-                from text.chinese2 import text_normalize as text_normalize_zh
-                #text = clean_text(text)
-                text = text_normalize_zh(text)
+                if any(c.isdigit() for c in text):#有数字才调用这个
+                    _, _, text = clean_text(text, lang, "v2")
+                    #这个已经将数字转换成了汉字，analyze_text没有起到任何作用
+                    #这个的内部实现就是调用text.chinese2的text_normalize，所以这两个等价
                 text = self.zh_tn_model.normalize(text)
                 text = text.replace("\n", "")
                 text = replace_blank(text)
@@ -179,13 +172,15 @@ class CosyVoiceFrontEnd:
                 texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "zh", token_max_n=80,
                                             token_min_n=60, merge_len=20, comma_split=False))
             elif lang == "en":
-                    text = self.en_tn_model.normalize(text)
-                    from analyze_number_english import analyze_english_text
-                    text,_ = analyze_english_text(text) #_是一个list，不能直接用
-                    text = spell_out_number(text, self.inflect_parser)
-                    texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "en", token_max_n=80,
-                                                token_min_n=60, merge_len=20, comma_split=False))
-            else:#自动识别语言
+                if any(c.isdigit() for c in text):#有数字才调用这个
+                    _, _, text = clean_text(text, lang, "v2")
+                    #这个已经将数字转换成了汉字，analyze_text没有起到任何作用
+                    #这个的内部实现就是调用text.chinese2的text_normalize，所以这两个等价
+                text = self.en_tn_model.normalize(text)
+                text = spell_out_number(text, self.inflect_parser)
+                texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "en", token_max_n=80,
+                                            token_min_n=60, merge_len=20, comma_split=False))
+            else:#其他原语言或者混合语言，自动识别语言，此时不能先clean_text
                 texts = self.text_normalize_auto_language(text)
                 
         texts = [i for i in texts if not is_only_punctuation(i)]
@@ -202,31 +197,29 @@ class CosyVoiceFrontEnd:
             texts = [i["text"] for i in json.loads(self.frd.do_voicegen_frd(text))["sentences"]]
             text = ''.join(texts)
         else:
-            #数字转换
-            from analyze_number import analyze_text
-            try:
-                text,_ = analyze_text(text) #整体读
-                print(text)
-            except:
-                pass
             #语言检测
             import sys
             sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
             from text.cleaner import clean_text
             from text.LangSegmenter.langsegmenter import LangSegmenter
             langlist,textlist = [],[]
-            for tmp in LangSegmenter.getTexts(text):
-                langlist.append(tmp["lang"])
-                textlist.append(tmp["text"])
+            try:
+                for tmp in LangSegmenter.getTexts(text):
+                    langlist.append(tmp["lang"])
+                    textlist.append(tmp["text"])
+            except:
+                pass
+            if langlist == [] and textlist == []:
+                textlist = [text]
+                langlist = ["zh"]
             norm_text_list = []
             for i in range(len(textlist)):
+                text = textlist[i]
                 lang = langlist[i]
-                _, _, text = clean_text(textlist[i], lang, "v2")
-                print(lang)
-                if lang == "zh":                        
-                    from text.chinese2 import text_normalize as text_normalize_zh
-                    #text = clean_text(text)
-                    text = text_normalize_zh(text)
+                print(text, lang)
+                if lang == "zh":
+                    if any(c.isdigit() for c in text):#有数字才调用这个
+                        _, _, text = clean_text(text, lang, "v2")
                     text = self.zh_tn_model.normalize(text)
                     text = text.replace("\n", "")
                     text = replace_blank(text)
@@ -238,9 +231,9 @@ class CosyVoiceFrontEnd:
                     texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "zh", token_max_n=80,
                                                 token_min_n=60, merge_len=20, comma_split=False))
                 else:#if lang == "en":
+                    if any(c.isdigit() for c in text):#有数字才调用这个
+                        _, _, text = clean_text(text, lang, "v2")
                     text = self.en_tn_model.normalize(text)
-                    #from analyze_number_english import analyze_english_text
-                    #text,_ = analyze_english_text(text) #res是一个list，不能直接用
                     text = spell_out_number(text, self.inflect_parser)
                     texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "en", token_max_n=80,
                                                 token_min_n=60, merge_len=20, comma_split=False))                    
