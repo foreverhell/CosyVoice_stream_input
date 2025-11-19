@@ -89,21 +89,23 @@ class CosyVoice:
                 yield model_output
                 start_time = time.time()
 
-    def inference_zero_shot(self, tts_text, prompt_text, prompt_speech_16k, zero_shot_spk_id='', stream=False, speed=1.0, text_frontend=True):
-        prompt_text = self.frontend.text_normalize(prompt_text, split=False, text_frontend=text_frontend)
-        for i in tqdm(self.frontend.text_normalize(tts_text, split=True, text_frontend=text_frontend)):
+    def inference_zero_shot(self, tts_text, prompt_text, prompt_speech_16k, zero_shot_spk_id='', stream=False, speed=1.0, text_frontend=True, lang="zh"):
+        prompt_text = self.frontend.text_normalize(prompt_text, split=False, text_frontend=text_frontend, lang=lang)
+        for i in tqdm(self.frontend.text_normalize(tts_text, split=True, text_frontend=text_frontend, lang=lang)):
             if (isinstance(i, str)) and len(i) < 0.5 * len(prompt_text):
                 logging.warning('synthesis text {} too short than prompt text {}, this may lead to bad performance'.format(i, prompt_text))
+            print("now text",i)
             model_input = self.frontend.frontend_zero_shot(i, prompt_text, prompt_speech_16k, self.sample_rate, zero_shot_spk_id)
             start_time = time.time()
             logging.info('synthesis text {}'.format(i))
             #print("model_input: ", model_input.get("consumed_texts"), "\n" * 10)
             
-            for model_output in self.model.tts(**model_input, stream=stream, speed=speed):
+            for j,model_output in enumerate(self.model.tts(**model_input, stream=stream, speed=speed)):
                 if model_output.get("tts_speech") is not None:
                     speech_len = model_output['tts_speech'].shape[1] / self.sample_rate
                     logging.info('yield speech len {}, rtf {}'.format(speech_len, (time.time() - start_time) / speech_len))
                 model_output["text"] = model_input.get("consumed_texts")
+                                
                 yield model_output
                 start_time = time.time()
 
@@ -199,7 +201,7 @@ class CosyVoice:
 
 class CosyVoice2(CosyVoice):
 
-    def __init__(self, model_dir, load_jit=False, load_trt=False, load_vllm=False, fp16=False, trt_concurrent=1):
+    def __init__(self, model_dir, load_jit=False, load_trt=False, load_vllm=False, fp16=False, trt_concurrent=1, gpu_memory_utilization=0.4):
         self.instruct = True if '-Instruct' in model_dir else False
         self.model_dir = model_dir
         self.fp16 = fp16
@@ -227,7 +229,7 @@ class CosyVoice2(CosyVoice):
                         '{}/flow.pt'.format(model_dir),
                         '{}/hift.pt'.format(model_dir))
         if load_vllm:
-            self.model.load_vllm('{}/vllm'.format(model_dir))
+            self.model.load_vllm('{}/vllm'.format(model_dir), gpu_memory_utilization)
         if load_jit:
             self.model.load_jit('{}/flow.encoder.{}.zip'.format(model_dir, 'fp16' if self.fp16 is True else 'fp32'))
         if load_trt:
