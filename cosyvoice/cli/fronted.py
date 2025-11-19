@@ -156,9 +156,11 @@ class CosyVoiceFrontEnd:
             import sys
             sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
             from text.cleaner import clean_text
-            if "zh" in lang:
+            if lang.startswith("<|") and lang.endswith("|>"):
+                lang = lang[2:-2]
+            if lang == "zh":
                 if any(c.isdigit() for c in text):#有数字才调用这个
-                    _, _, text = clean_text(text, lang, "v2")
+                    _, _, text = clean_text(text, lang, "v2")#这个必须是zh, en这种格式
                     #这个已经将数字转换成了汉字，analyze_text没有起到任何作用
                     #这个的内部实现就是调用text.chinese2的text_normalize，所以这两个等价
                 text = self.zh_tn_model.normalize(text)
@@ -171,7 +173,7 @@ class CosyVoiceFrontEnd:
                 text = re.sub(r'[，,、]+$', '。', text)
                 texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "zh", token_max_n=80,
                                             token_min_n=60, merge_len=20, comma_split=False))
-            elif "en" in lang:
+            elif lang == "en":
                 if any(c.isdigit() for c in text):#有数字才调用这个
                     _, _, text = clean_text(text, lang, "v2")
                     #这个已经将数字转换成了汉字，analyze_text没有起到任何作用
@@ -185,7 +187,6 @@ class CosyVoiceFrontEnd:
                 texts = ["".join(texts)]
                 
         texts = [i for i in texts if not is_only_punctuation(i)]
-        print(1111111111111111,texts)
         return texts if split is True else text
       
     def text_normalize_auto_language(self, text, split=True, text_frontend=True):
