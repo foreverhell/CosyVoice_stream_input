@@ -45,6 +45,7 @@ parser.add_argument('--model', type=str, default="/mnt/disk2/home/yiyangzhe/Cosy
 parser.add_argument('--host', type=str, default='0.0.0.0', help="服务器监听地址")
 parser.add_argument('--port', type=int, default=9881, help="服务器监听端口")
 parser.add_argument('--version', type=str, default="v3", help="version")#尽量少修改代码，通过配置去影响代码行为
+parser.add_argument('--gpu_memory_utilization', type=float, default=0.2)
 
 args = parser.parse_args()
 
@@ -74,7 +75,7 @@ async def lifespan(app:FastAPI):
             Warning("Qwen-Omni version is not supported")
     except:
         Warning("Qwen-Omni server has not been started")
-    cosyvoice = CosyVoice2(args.model, load_jit=True, load_trt=True, load_vllm=True, fp16=True)
+    cosyvoice = CosyVoice2(args.model, load_jit=True, load_trt=True, load_vllm=True, fp16=True, gpu_memory_utilization=args.gpu_memory_utilization)
     warmup(2)
     yield
 
@@ -1138,9 +1139,9 @@ async def chat_completions(request: Request):
         openai = body.get("openai", True)
         is_cut = body.get("is_cut", False)
         min_len = body.get("min_len", 5)
-        stream_input = body.get("stream_input", True) #写死，流式输入会导致数字发音有错
+        stream_input = False#body.get("stream_input", True) #写死，流式输入会导致数字发音有错
         stream_output = body.get("stream_output", True)
-        lang = body.get("lang","zh")
+        lang = body.get("lang","")#默认不传语言标签，自动识别语言
         try:
             if stream_input:
                 if openai:
