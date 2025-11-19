@@ -156,7 +156,7 @@ class CosyVoiceFrontEnd:
             import sys
             sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
             from text.cleaner import clean_text
-            if lang == "zh":
+            if "zh" in lang:
                 if any(c.isdigit() for c in text):#有数字才调用这个
                     _, _, text = clean_text(text, lang, "v2")
                     #这个已经将数字转换成了汉字，analyze_text没有起到任何作用
@@ -171,7 +171,7 @@ class CosyVoiceFrontEnd:
                 text = re.sub(r'[，,、]+$', '。', text)
                 texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "zh", token_max_n=80,
                                             token_min_n=60, merge_len=20, comma_split=False))
-            elif lang == "en":
+            elif "en" in lang:
                 if any(c.isdigit() for c in text):#有数字才调用这个
                     _, _, text = clean_text(text, lang, "v2")
                     #这个已经将数字转换成了汉字，analyze_text没有起到任何作用
@@ -181,9 +181,11 @@ class CosyVoiceFrontEnd:
                 texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "en", token_max_n=80,
                                             token_min_n=60, merge_len=20, comma_split=False))
             else:#其他原语言或者混合语言，自动识别语言，此时不能先clean_text
-                texts = self.text_normalize_auto_language(text)
+                texts = self.text_normalize_auto_language(text)#前面的list中只有1个元素；这个文本分割后做语言识别，再分别文本前端处理，返回的list中包含多个元素，导致停顿过多
+                texts = ["".join(texts)]
                 
         texts = [i for i in texts if not is_only_punctuation(i)]
+        print(1111111111111111,texts)
         return texts if split is True else text
       
     def text_normalize_auto_language(self, text, split=True, text_frontend=True):
@@ -197,6 +199,9 @@ class CosyVoiceFrontEnd:
             texts = [i["text"] for i in json.loads(self.frd.do_voicegen_frd(text))["sentences"]]
             text = ''.join(texts)
         else:
+            punc = ",.?!，。？！"
+            if text[-1] in punc:
+                text = text[:-1]
             #语言检测
             import sys
             sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -217,6 +222,8 @@ class CosyVoiceFrontEnd:
                 text = textlist[i]
                 lang = langlist[i]
                 print(text, lang)
+                if all(c.isdigit() for c in text):#全部是数字，默认按照中文读
+                    _, _, text = clean_text(text, 'zh', "v2")
                 if lang == "zh":
                     if any(c.isdigit() for c in text):#有数字才调用这个
                         _, _, text = clean_text(text, lang, "v2")
@@ -230,15 +237,15 @@ class CosyVoiceFrontEnd:
                     text = re.sub(r'[，,、]+$', '。', text)
                     texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "zh", token_max_n=80,
                                                 token_min_n=60, merge_len=20, comma_split=False))
+                    
                 else:#if lang == "en":
                     if any(c.isdigit() for c in text):#有数字才调用这个
                         _, _, text = clean_text(text, lang, "v2")
                     text = self.en_tn_model.normalize(text)
                     text = spell_out_number(text, self.inflect_parser)
                     texts = list(split_paragraph(text, partial(self.tokenizer.encode, allowed_special=self.allowed_special), "en", token_max_n=80,
-                                                token_min_n=60, merge_len=20, comma_split=False))                    
-                
-                norm_text_list.append("".join(texts))
+                                                token_min_n=60, merge_len=20, comma_split=False))
+                norm_text_list.append(text)
         texts = [i for i in norm_text_list if not is_only_punctuation(i)]
         return texts if split is True else text
     
