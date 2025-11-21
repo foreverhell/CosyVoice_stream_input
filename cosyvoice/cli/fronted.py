@@ -240,7 +240,7 @@ class CosyVoiceFrontEnd:
                                                 token_min_n=60, merge_len=20, comma_split=False))
                     
                 else:#if lang == "en":
-                    if any(c.isdigit() for c in text):#有数字才调用这个
+                    if lang == "en" and any(c.isdigit() for c in text):#有数字才调用这个
                         _, _, text = clean_text(text, lang, "v2")
                     text = self.en_tn_model.normalize(text)
                     text = spell_out_number(text, self.inflect_parser)
